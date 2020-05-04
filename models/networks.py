@@ -62,6 +62,10 @@ def print_network(net):
     print(net)
     print('Total number of parameters: %d' % num_params)
 
+def hinge_loss(input, target_tensor):
+    minval = torch.min(input - 1, target_tensor)
+    return -torch.mean(minval)
+
 ##############################################################################
 # Losses
 ##############################################################################
@@ -75,7 +79,7 @@ class GANLoss(nn.Module):
         self.fake_label_var = None
         self.Tensor = tensor
         if use_lsgan:
-            self.loss = nn.MSELoss()
+            self.loss = hinge_loss
         else:
             self.loss = nn.BCELoss()
 
