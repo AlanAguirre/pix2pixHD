@@ -87,7 +87,9 @@ def print_network(net):
     print(net)
     print('Total number of parameters: %d' % num_params)
 
-def hinge_loss(input, target_tensor, target_is_real):
+def hinge_loss(input, target_tensor, target_is_real, for_discriminator):
+    loss=0
+    if for_discriminator:
         #Check if target is real
         if target_is_real:
             minval = torch.min(input - 1, target_tensor)
@@ -95,7 +97,10 @@ def hinge_loss(input, target_tensor, target_is_real):
         else:
             minval = torch.min(-input - 1, target_tensor)
             loss = -torch.mean(minval)
-        return loss
+    else:
+        loss = -torch.mean(input)
+    
+    return loss
         
 ##############################################################################
 # Losses
@@ -128,17 +133,17 @@ class GANLoss(nn.Module):
             target_tensor = self.fake_label_var
         return target_tensor
 
-    def __call__(self, input, target_is_real):
+    def __call__(self, input, target_is_real, for_discriminator=True):
         if isinstance(input[0], list):
             loss = 0
             for input_i in input:
                 pred = input_i[-1]
                 target_tensor = self.get_target_tensor(pred, target_is_real)
-                loss += hinge_loss(pred, target_tensor, target_is_real)
+                loss += hinge_loss(pred, target_tensor, target_is_real, for_discriminator)
             return loss
         else:            
             target_tensor = self.get_target_tensor(input[-1], target_is_real)
-            return hinge_loss(input[-1], target_tensor, target_is_real)
+            return hinge_loss(input[-1], target_tensor, target_is_real, for_discriminator)
 
 class VGGLoss(nn.Module):
     def __init__(self, gpu_ids):
