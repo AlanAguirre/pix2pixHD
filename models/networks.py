@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.utils.spectral_norm as spectral_norm
 import functools
 from torch.autograd import Variable
 import numpy as np
@@ -16,13 +17,37 @@ def weights_init(m):
         m.bias.data.fill_(0)
 
 def get_norm_layer(norm_type='instance'):
-    if norm_type == 'batch':
-        norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
-    elif norm_type == 'instance':
-        norm_layer = functools.partial(nn.InstanceNorm2d, affine=False)
-    else:
-        raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
-    return norm_layer
+    # helper function to get # output channels of the previous layer
+    def get_out_channel(layer):
+        if hasattr(layer, 'out_channels'):
+            return getattr(layer, 'out_channels')
+        return layer.weight.size(0)
+
+    # this function will be returned
+    def add_norm_layer(layer):
+        nonlocal norm_type
+
+        layer = spectral_norm(layer)
+
+        if norm_type == 'none' or len(norm_type) == 0:
+            return layer
+
+        # remove bias in the previous layer, which is meaningless
+        # since it has no effect after normalization
+        if getattr(layer, 'bias', None) is not None:
+            delattr(layer, 'bias')
+            layer.register_parameter('bias', None)
+
+        if norm_type == 'batch':
+            norm_layer = nn.BatchNorm2d(get_out_channel(layer), affine=True)
+        elif norm_type == 'instance':
+            norm_layer = nn.InstanceNorm2d(get_out_channel(layer), affine=False)
+        else:
+            raise ValueError('normalization layer %s is not recognized' % norm_type)
+
+        return nn.Sequential(layer, norm_layer)
+
+    return add_norm_layer
 
 def define_G(input_nc, output_nc, ngf, netG, n_downsample_global=3, n_blocks_global=9, n_local_enhancers=1, 
              n_blocks_local=3, norm='instance', gpu_ids=[]):    
@@ -148,18 +173,15 @@ class LocalEnhancer(nn.Module):
         for n in range(1, n_local_enhancers+1):
             ### downsample            
             ngf_global = ngf * (2**(n_local_enhancers-n))
-            model_downsample = [nn.ReflectionPad2d(3), nn.Conv2d(input_nc, ngf_global, kernel_size=7, padding=0), 
-                                norm_layer(ngf_global), nn.ReLU(True),
-                                nn.Conv2d(ngf_global, ngf_global * 2, kernel_size=3, stride=2, padding=1), 
-                                norm_layer(ngf_global * 2), nn.ReLU(True)]
+            model_downsample = [nn.ReflectionPad2d(3), norm_layer(nn.Conv2d(input_nc, ngf_global, kernel_size=7, padding=0)), nn.ReLU(True),
+                                norm_layer(nn.Conv2d(ngf_global, ngf_global * 2, kernel_size=3, stride=2, padding=1)), nn.ReLU(True)]
             ### residual blocks
             model_upsample = []
             for i in range(n_blocks_local):
                 model_upsample += [ResnetBlock(ngf_global * 2, padding_type=padding_type, norm_layer=norm_layer)]
 
             ### upsample
-            model_upsample += [nn.ConvTranspose2d(ngf_global * 2, ngf_global, kernel_size=3, stride=2, padding=1, output_padding=1), 
-                               norm_layer(ngf_global), nn.ReLU(True)]      
+            model_upsample += [norm_layer(nn.ConvTranspose2d(ngf_global * 2, ngf_global, kernel_size=3, stride=2, padding=1, output_padding=1)), nn.ReLU(True)]      
 
             ### final convolution
             if n == n_local_enhancers:                
@@ -193,12 +215,11 @@ class GlobalGenerator(nn.Module):
         super(GlobalGenerator, self).__init__()        
         activation = nn.ReLU(True)        
 
-        model = [nn.ReflectionPad2d(3), nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0), norm_layer(ngf), activation]
+        model = [nn.ReflectionPad2d(3), norm_layer(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0)), activation]
         ### downsample
         for i in range(n_downsampling):
             mult = 2**i
-            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1),
-                      norm_layer(ngf * mult * 2), activation]
+            model += [norm_layer(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)), activation]
 
         ### resnet blocks
         mult = 2**n_downsampling
@@ -208,8 +229,7 @@ class GlobalGenerator(nn.Module):
         ### upsample         
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
-            model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1),
-                       norm_layer(int(ngf * mult / 2)), activation]
+            model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), activation]
         model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]        
         self.model = nn.Sequential(*model)
             
@@ -234,8 +254,7 @@ class ResnetBlock(nn.Module):
         else:
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
 
-        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
-                       norm_layer(dim),
+        conv_block += [norm_layer(nn.Conv2d(dim, dim, kernel_size=3, padding=p)),
                        activation]
         if use_dropout:
             conv_block += [nn.Dropout(0.5)]
@@ -249,8 +268,7 @@ class ResnetBlock(nn.Module):
             p = 1
         else:
             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
-        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p),
-                       norm_layer(dim)]
+        conv_block += [norm_layer(nn.Conv2d(dim, dim, kernel_size=3, padding=p))]
 
         return nn.Sequential(*conv_block)
 
@@ -263,19 +281,16 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()        
         self.output_nc = output_nc        
 
-        model = [nn.ReflectionPad2d(3), nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0), 
-                 norm_layer(ngf), nn.ReLU(True)]             
+        model = [nn.ReflectionPad2d(3), norm_layer(nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0)), nn.ReLU(True)]             
         ### downsample
         for i in range(n_downsampling):
             mult = 2**i
-            model += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1),
-                      norm_layer(ngf * mult * 2), nn.ReLU(True)]
+            model += [norm_layer(nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3, stride=2, padding=1)), nn.ReLU(True)]
 
         ### upsample         
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
-            model += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1),
-                       norm_layer(int(ngf * mult / 2)), nn.ReLU(True)]        
+            model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), nn.ReLU(True)]        
 
         model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
         self.model = nn.Sequential(*model) 
@@ -352,15 +367,13 @@ class NLayerDiscriminator(nn.Module):
             nf_prev = nf
             nf = min(nf * 2, 512)
             sequence += [[
-                nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw),
-                norm_layer(nf), nn.LeakyReLU(0.2, True)
+                norm_layer(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=2, padding=padw)), nn.LeakyReLU(0.2, True)
             ]]
 
         nf_prev = nf
         nf = min(nf * 2, 512)
         sequence += [[
-            nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw),
-            norm_layer(nf),
+            norm_layer(nn.Conv2d(nf_prev, nf, kernel_size=kw, stride=1, padding=padw)),
             nn.LeakyReLU(0.2, True)
         ]]
 
