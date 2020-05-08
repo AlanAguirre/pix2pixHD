@@ -66,7 +66,8 @@ class Pix2PixHDModel(BaseModel):
             if opt.pool_size > 0 and (len(self.gpu_ids)) > 1:
                 raise NotImplementedError("Fake Pool Not Implemented for MultiGPU")
             self.fake_pool = ImagePool(opt.pool_size)
-            self.old_lr = opt.lr
+            self.old_lrG = opt.lrG
+            self.old_lrD = opt.lrD
 
             # define loss functions
             self.loss_filter = self.init_loss_filter(not opt.no_ganFeat_loss, not opt.no_vgg_loss)
@@ -102,11 +103,11 @@ class Pix2PixHDModel(BaseModel):
                 params = list(self.netG.parameters())
             if self.gen_features:              
                 params += list(self.netE.parameters())         
-            self.optimizer_G = torch.optim.Adam(params, lr=opt.lr, betas=(opt.beta1, 0.999))                            
+            self.optimizer_G = torch.optim.Adam(params, lr=opt.lrG, betas=(opt.beta1, 0.999))                            
 
             # optimizer D                        
             params = list(self.netD.parameters())    
-            self.optimizer_D = torch.optim.Adam(params, lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_D = torch.optim.Adam(params, lr=opt.lrD, betas=(opt.beta1, 0.999))
 
     def encode_input(self, label_map, inst_map=None, real_image=None, feat_map=None, infer=False):             
         if self.opt.label_nc == 0:
@@ -281,20 +282,24 @@ class Pix2PixHDModel(BaseModel):
         params = list(self.netG.parameters())
         if self.gen_features:
             params += list(self.netE.parameters())           
-        self.optimizer_G = torch.optim.Adam(params, lr=self.opt.lr, betas=(self.opt.beta1, 0.999))
+        self.optimizer_G = torch.optim.Adam(params, lr=self.opt.lrG, betas=(self.opt.beta1, 0.999))
         if self.opt.verbose:
             print('------------ Now also finetuning global generator -----------')
 
     def update_learning_rate(self):
-        lrd = self.opt.lr / self.opt.niter_decay
-        lr = self.old_lr - lrd        
+        lrDd = self.opt.lrD / self.opt.niter_decay
+        lrGd = self.opt.lrG / self.opt.niter_decay
+        lrD = self.old_lrD - lrDd
+        lrG = self.old_lrG - lrGd
         for param_group in self.optimizer_D.param_groups:
-            param_group['lr'] = lr
+            param_group['lr'] = lrD
         for param_group in self.optimizer_G.param_groups:
-            param_group['lr'] = lr
+            param_group['lr'] = lrG
         if self.opt.verbose:
-            print('update learning rate: %f -> %f' % (self.old_lr, lr))
-        self.old_lr = lr
+            print('update discriminator learning rate: %f -> %f' % (self.old_lrD, lrD))
+            print('update generator learning rate: %f -> %f' % (self.old_lrG, lrG))
+        self.old_lrD = lrD
+        self.old_lrG = lrG
 
 class InferenceModel(Pix2PixHDModel):
     def forward(self, inp):
