@@ -50,10 +50,10 @@ def get_norm_layer(norm_type='instance'):
     return add_norm_layer
 
 def define_G(input_nc, output_nc, ngf, netG, n_downsample_global=3, n_blocks_global=9, n_local_enhancers=1, 
-             n_blocks_local=3, norm='instance', gpu_ids=[]):    
+             n_blocks_local=3, norm='instance', gpu_ids=[], self_attn_kernel=0):    
     norm_layer = get_norm_layer(norm_type=norm)     
     if netG == 'global':    
-        netG = GlobalGenerator(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global, norm_layer)       
+        netG = GlobalGenerator(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global, norm_layer, self_attn_kernel=self_attn_kernel)       
     elif netG == 'local':        
         netG = LocalEnhancer(input_nc, output_nc, ngf, n_downsample_global, n_blocks_global, 
                                   n_local_enhancers, n_blocks_local, norm_layer)
@@ -146,6 +146,48 @@ class VGGLoss(nn.Module):
         return loss
 
 ##############################################################################
+# Self-Attention
+##############################################################################
+class Self_Attn(nn.Module):
+    """ Self attention Layer"""
+    def __init__(self,in_dim, self_attn_kernel):
+        super(Self_Attn,self).__init__()
+        self.chanel_in = in_dim
+        
+        self.avg_pool = nn.AvgPool2d(kernel_size=self_attn_kernel, padding=0, ceil_mode=False, count_include_pad=False)
+        self.query_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
+        self.key_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim//8 , kernel_size= 1)
+        self.value_conv = nn.Conv2d(in_channels = in_dim , out_channels = in_dim , kernel_size= 1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+        self.softmax  = nn.Softmax(dim=-1) #
+    def forward(self,input):
+        """
+            inputs :
+                x : input feature maps( B X C X W X H)
+            returns :
+                out : self attention value + input feature 
+                attention: B X N X N (N is Width*Height)
+        """
+        _,_,in_width,in_height = input.size()
+        x = self.avg_pool(input)
+        
+        m_batchsize,C,width ,height = x.size()
+        proj_query  = self.query_conv(x).view(m_batchsize,-1,width*height).permute(0,2,1) # B X CX(N)
+        proj_key =  self.key_conv(x).view(m_batchsize,-1,width*height) # B X C x (*W*H)
+        energy =  torch.bmm(proj_query,proj_key) # transpose check
+        attention = self.softmax(energy) # BX (N) X (N) 
+        proj_value = self.value_conv(x).view(m_batchsize,-1,width*height) # B X C X N
+
+        out = torch.bmm(proj_value,attention.permute(0,2,1) )
+       
+        out = out.view(m_batchsize,C,width,height)
+        out = nn.functional.interpolate(out, size=(in_width,in_height))
+        out = self.gamma*out + input
+        return out
+
+
+##############################################################################
 # Generator
 ##############################################################################
 class LocalEnhancer(nn.Module):
@@ -201,7 +243,7 @@ class LocalEnhancer(nn.Module):
 
 class GlobalGenerator(nn.Module):
     def __init__(self, input_nc, output_nc, ngf=64, n_downsampling=3, n_blocks=9, norm_layer=nn.BatchNorm2d, 
-                 padding_type='reflect'):
+                 padding_type='reflect', self_attn_kernel=0):
         assert(n_blocks >= 0)
         super(GlobalGenerator, self).__init__()        
         activation = nn.ReLU(True)        
@@ -221,7 +263,10 @@ class GlobalGenerator(nn.Module):
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
             model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), activation]
-        model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]        
+        model += [nn.ReflectionPad2d(3)]
+        if (self_attn_kernel > 0):
+            model += [Self_Attn(ngf, self_attn_kernel)]
+        model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
         self.model = nn.Sequential(*model)
             
     def forward(self, input):
