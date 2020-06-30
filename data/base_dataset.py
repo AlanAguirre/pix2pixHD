@@ -41,6 +41,12 @@ def get_transform(opt, params, method=Image.BICUBIC, normalize=True):
     if 'crop' in opt.resize_or_crop:
         transform_list.append(transforms.Lambda(lambda img: __crop(img, params['crop_pos'], opt.fineSize)))
 
+    if 'dynamic' in opt.resize_or_crop:
+        base = float(2 ** opt.n_downsample_global)
+        if opt.netG == 'local':
+            base *= (2 ** opt.n_local_enhancers)
+        transform_list.append(transforms.Lambda(lambda img: __dynamic(img, base, opt.loadSize, method)))
+
     if opt.resize_or_crop == 'none':
         base = float(2 ** opt.n_downsample_global)
         if opt.netG == 'local':
@@ -64,6 +70,23 @@ def __make_power_2(img, base, method=Image.BICUBIC):
     ow, oh = img.size        
     h = int(round(oh / base) * base)
     w = int(round(ow / base) * base)
+    if (h == oh) and (w == ow):
+        return img
+    return img.resize((w, h), method)
+
+def __dynamic(img, base, target_width, method=Image.BICUBIC):
+    #target_width = 1348
+    ow, oh = img.size   
+    if (oh < ow > target_width):      
+      oh = int(target_width * oh / ow)
+      ow = target_width   
+    elif (oh > target_width):      
+      ow = int(target_width * ow / oh)
+      oh = target_width
+     
+    h = int((oh // base) * base)
+    w = int((ow // base) * base)
+
     if (h == oh) and (w == ow):
         return img
     return img.resize((w, h), method)
