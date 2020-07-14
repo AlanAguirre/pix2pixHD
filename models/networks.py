@@ -263,10 +263,11 @@ class GlobalGenerator(nn.Module):
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
             model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), activation]
-        model += [nn.ReflectionPad2d(3)]
+        
         if (self_attn_kernel > 0):
-            model += [Self_Attn(ngf, self_attn_kernel)]
-        model += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
+            model += [nn.ReflectionPad2d(3), Self_Attn(ngf, self_attn_kernel), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
+        else:
+            model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
         self.model = nn.Sequential(*model)
             
     def forward(self, input):
