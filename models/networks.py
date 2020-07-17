@@ -218,7 +218,7 @@ class LocalEnhancer(nn.Module):
 
             ### final convolution
             if n == n_local_enhancers:                
-                model_upsample += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]                       
+                model_upsample += [nn.ReflectionPad2d(3), spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)), nn.Tanh()]                       
             
             setattr(self, 'model'+str(n)+'_1', nn.Sequential(*model_downsample))
             setattr(self, 'model'+str(n)+'_2', nn.Sequential(*model_upsample))                  
@@ -265,9 +265,9 @@ class GlobalGenerator(nn.Module):
             model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), activation]
         
         if (self_attn_kernel > 0):
-            model += [nn.ReflectionPad2d(3), Self_Attn(ngf, self_attn_kernel), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
+            model += [nn.ReflectionPad2d(3), Self_Attn(ngf, self_attn_kernel), spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)), nn.Tanh()]
         else:
-            model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
+            model += [nn.ReflectionPad2d(3), spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)), nn.Tanh()]
         self.model = nn.Sequential(*model)
             
     def forward(self, input):
@@ -329,7 +329,7 @@ class Encoder(nn.Module):
             mult = 2**(n_downsampling - i)
             model += [norm_layer(nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2), kernel_size=3, stride=2, padding=1, output_padding=1)), nn.ReLU(True)]        
 
-        model += [nn.ReflectionPad2d(3), nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0), nn.Tanh()]
+        model += [nn.ReflectionPad2d(3), spectral_norm(nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)), nn.Tanh()]
         self.model = nn.Sequential(*model) 
 
     def forward(self, input, inst):
@@ -397,7 +397,7 @@ class NLayerDiscriminator(nn.Module):
 
         kw = 4
         padw = int(np.ceil((kw-1.0)/2))
-        sequence = [[nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw), nn.LeakyReLU(0.2, True)]]
+        sequence = [[spectral_norm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)), nn.LeakyReLU(0.2, True)]]
 
         nf = ndf
         for n in range(1, n_layers):
@@ -414,7 +414,7 @@ class NLayerDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, True)
         ]]
 
-        sequence += [[nn.Conv2d(nf, 1, kernel_size=kw, stride=1, padding=padw)]]
+        sequence += [[spectral_norm(nn.Conv2d(nf, 1, kernel_size=kw, stride=1, padding=padw))]]
 
         if use_sigmoid:
             sequence += [[nn.Sigmoid()]]
